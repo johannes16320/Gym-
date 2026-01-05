@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gym Planner Pro - Kalender-Edition</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root { --primary: #2563eb; --accent: #f59e0b; --danger: #ef4444; --success: #22c55e; --bg: #0f172a; --card: #1e293b; --text: #f8fafc; --secondary: #64748b; }
+        body { font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 10px; padding-bottom: 90px; }
+        .container { max-width: 600px; margin: auto; }
+        
+        /* Header & Week Selector */
+        .week-nav { display: flex; justify-content: space-between; align-items: center; background: var(--card); padding: 15px; border-radius: 12px; margin-bottom: 15px; }
+        .week-btn { background: var(--primary); color: white; border: none; padding: 8px 15px; border-radius: 6px; cursor: pointer; }
+        
+        .header-stats { display: flex; justify-content: space-around; background: var(--card); padding: 10px; border-radius: 12px; margin-bottom: 15px; font-size: 0.9rem; }
+        
+        /* Today Highlight */
+        .today-card { border: 2px solid var(--accent) !important; box-shadow: 0 0 15px rgba(245, 158, 11, 0.2); }
+        .date-label { font-size: 0.8rem; color: var(--secondary); display: block; margin-bottom: 4px; }
+
+        /* General UI */
+        .nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); display: flex; justify-content: space-around; padding: 15px; border-top: 1px solid #334155; z-index: 100; }
+        .nav-item { color: var(--secondary); font-size: 0.75rem; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+        .nav-item.active { color: var(--primary); font-weight: bold; }
+        .section { display: none; }
+        .section.active { display: block; animation: fadeIn 0.2s; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+        .card { background: var(--card); padding: 15px; border-radius: 12px; margin-bottom: 15px; border-left: 4px solid var(--primary); }
+        .input-group { background: var(--card); padding: 15px; border-radius: 12px; display: flex; flex-direction: column; gap: 10px; margin-bottom: 15px; }
+        input, select, button { padding: 12px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: white; font-size: 1rem; }
+        button { background: var(--primary); border: none; font-weight: bold; cursor: pointer; }
+        .exercise-item { padding: 8px 0; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="week-nav">
+        <button class="week-btn" onclick="changeWeek(-1)">◀</button>
+        <div style="text-align: center;">
+            <strong id="current-week-label">Woche 1</strong><br>
+            <small id="week-date-range" style="color: var(--secondary);"></small>
+        </div>
+        <button class="week-btn" onclick="changeWeek(1)">▶</button>
+    </div>
+
+    <div class="header-stats">
+        <span>🔥 Streak: <b id="streak-val">0</b></span>
+        <span>🏋️ Heute: <b id="vol-val">0 t</b></span>
+    </div>
+
+    <div id="plan" class="section active">
+        <div id="display-plan"></div>
+    </div>
+
+    <div id="log" class="section">
+        <h2>💪 Training loggen</h2>
+        <div class="input-group">
+            <label style="font-size: 0.8rem;">Für Datum:</label>
+            <input type="date" id="log-date">
+            <input type="text" id="log-ex" placeholder="Übung..." list="ex-suggestions">
+            <datalist id="ex-suggestions"></datalist>
+            <div style="display: flex; gap: 10px;">
+                <input type="number" id="log-weight" placeholder="kg" style="flex:1">
+                <input type="number" id="log-reps" placeholder="Reps" style="flex:1">
+            </div>
+            <button onclick="saveLog()">Satz speichern</button>
+        </div>
+        <div id="log-history"></div>
+    </div>
+
+    <div id="progress" class="section">
+        <h2>📈 Deine Entwicklung</h2>
+        <canvas id="progressChart"></canvas>
+        <canvas id="weightChart" style="margin-top:20px;"></canvas>
+    </div>
+
+    <div id="settings" class="section">
+        <h2>⚙️ Einstellungen & Editor</h2>
+        <div class="card">
+            <button onclick="exportData()" style="width:100%">Daten-Backup Exportieren</button>
+        </div>
+        <div class="input-group">
+            <h3>Plan bearbeiten</h3>
+            <p style="font-size: 0.8rem; color: var(--secondary);">Änderungen gelten für die aktuell gewählte Woche.</p>
+            <select id="edit-day-select"></select>
+            <input type="text" id="new-ex-input" placeholder="Neue Übung">
+            <button onclick="addExToPlan()">Hinzufügen</button>
+        </div>
+        <div id="editor-list"></div>
+    </div>
+</div>
+
+<nav class="nav">
+    <div class="nav-item active" onclick="showTab('plan', this)"><span>📅</span>Plan</div>
+    <div class="nav-item" onclick="showTab('log', this)"><span>💪</span>Log</div>
+    <div class="nav-item" onclick="showTab('progress', this)"><span>📈</span>Prog</div>
+    <div class="nav-item" onclick="showTab('settings', this)"><span>⚙️</span>Edit</div>
+</nav>
+
+<script>
+    // Konfiguration & Startdatum
+    const baseMonday = new Date(2026, 0, 5); // 05.01.2026
+    let currentViewWeekOffset = 0; // 0 = Woche vom 05.01.
+    
+    // Daten laden
+    let weekPlans = JSON.parse(localStorage.getItem('weekPlans')) || {}; 
+    let logs = JSON.parse(localStorage.getItem('gymLogs')) || [];
+    let weightLogs = JSON.parse(localStorage.getItem('weightLogs')) || [];
+
+    // Standard-Wochenplan-Vorlage
+    const defaultTemplate = {
+        0: ["Bankdrücken KH: 3x8", "OHP: 3x10"], // Montag
+        1: ["Kniebeugen: 4x6", "Beinpresse: 3x12"], // Dienstag
+        2: ["Laufen: 45 Min"], // Mittwoch
+        3: ["Klimmzüge: 4x Max", "Rudern: 3x10"], // Donnerstag
+        4: ["Zirkeltraining"], // Freitag
+        5: ["Pause"], // Samstag
+        6: ["Pause"]  // Sonntag
+    };
+
+    window.onload = function() {
+        document.getElementById('log-date').value = new Date().toISOString().split('T')[0];
+        initWeek(0);
+        renderPlan();
+        updateStats();
+    };
+
+    function initWeek(offset) {
+        if (!weekPlans[offset]) {
+            // Wenn keine Woche existiert, nimm Vorwoche oder Template
+            const prevWeek = weekPlans[offset - 1];
+            weekPlans[offset] = prevWeek ? JSON.parse(JSON.stringify(prevWeek)) : JSON.parse(JSON.stringify(defaultTemplate));
+            saveToStorage();
+        }
+    }
+
+    function changeWeek(dir) {
+        currentViewWeekOffset += dir;
+        initWeek(currentViewWeekOffset);
+        renderPlan();
+    }
+
+    function getWeekDates(offset) {
+        let start = new Date(baseMonday);
+        start.setDate(start.getDate() + (offset * 7));
+        let dates = [];
+        for(let i=0; i<7; i++) {
+            let d = new Date(start);
+            d.setDate(d.getDate() + i);
+            dates.push(d);
+        }
+        return dates;
+    }
+
+    function renderPlan() {
+        const dates = getWeekDates(currentViewWeekOffset);
+        const container = document.getElementById('display-plan');
+        const weekPlan = weekPlans[currentViewWeekOffset];
+        
+        document.getElementById('current-week-label').innerText = "Woche " + (currentViewWeekOffset + 1);
+        document.getElementById('week-date-range').innerText = 
+            dates[0].toLocaleDateString('de-DE', {day:'2-digit', month:'2-digit'}) + " - " + 
+            dates[6].toLocaleDateString('de-DE', {day:'2-digit', month:'2-digit'});
+
+        const todayStr = new Date().toDateString();
+
+        container.innerHTML = dates.map((date, index) => {
+            const isToday = date.toDateString() === todayStr;
+            const dayName = date.toLocaleDateString('de-DE', {weekday: 'long'});
+            const dateStr = date.toLocaleDateString('de-DE', {day:'2-digit', month:'2-digit', year:'numeric'});
+            
+            return `
+                <div class="card ${isToday ? 'today-card' : ''}" onclick="prepareLog('${date.toISOString().split('T')[0]}')">
+                    <span class="date-label">${dateStr}</span>
+                    <strong style="color:${isToday ? 'var(--accent)' : 'var(--primary)'}">${dayName}</strong>
+                    <div style="margin-top:8px">
+                        ${weekPlan[index].map(ex => `<div class="exercise-item">${ex}</div>`).join('')}
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    function prepareLog(dateIso) {
+        document.getElementById('log-date').value = dateIso;
+        showTab('log', document.querySelectorAll('.nav-item')[1]);
+    }
+
+    function saveLog() {
+        const date = document.getElementById('log-date').value;
+        const ex = document.getElementById('log-ex').value;
+        const w = parseFloat(document.getElementById('log-weight').value);
+        const r = parseInt(document.getElementById('log-reps').value);
+        if(!ex || isNaN(w)) return alert("Bitte Daten ausfüllen");
+
+        logs.unshift({ date, ex, w, r });
+        saveToStorage();
+        document.getElementById('log-weight').value = '';
+        renderLogs();
+        updateStats();
+        alert("Gespeichert für " + date);
+    }
+
+    function renderLogs() {
+        document.getElementById('log-history').innerHTML = logs.slice(0, 5).map(l => `
+            <div class="card" style="border-left-color:var(--secondary)">
+                <small>${l.date}</small> | <b>${l.ex}</b>: ${l.w}kg x ${l.r}
+            </div>
+        `).join('');
+    }
+
+    function updateStats() {
+        const today = new Date().toISOString().split('T')[0];
+        const vol = logs.filter(l => l.date === today).reduce((acc, l) => acc + (l.w * l.r), 0);
+        document.getElementById('vol-val').innerText = (vol/1000).toFixed(2) + " t";
+        document.getElementById('streak-val').innerText = [...new Set(logs.map(l => l.date))].length;
+    }
+
+    function showTab(id, el) {
+        document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+        document.getElementById(id).classList.add('active');
+        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+        el.classList.add('active');
+        if(id === 'settings') renderEditor();
+        if(id === 'log') renderLogs();
+        if(id === 'progress') updateCharts();
+    }
+
+    function renderEditor() {
+        const sel = document.getElementById('edit-day-select');
+        if(sel.options.length === 0) {
+            ["Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag","Sonntag"].forEach((d, i) => sel.add(new Option(d, i)));
+        }
+        const dayIdx = sel.value;
+        const dayPlan = weekPlans[currentViewWeekOffset][dayIdx];
+        document.getElementById('editor-list').innerHTML = dayPlan.map((ex, i) => `
+            <div class="exercise-item"><span>${ex}</span> <button onclick="removeEx(${dayIdx}, ${i})" style="color:var(--danger); background:none; border:none;">Löschen</button></div>
+        `).join('');
+    }
+
+    function addExToPlan() {
+        const idx = document.getElementById('edit-day-select').value;
+        const val = document.getElementById('new-ex-input').value;
+        if(!val) return;
+        weekPlans[currentViewWeekOffset][idx].push(val);
+        saveToStorage();
+        document.getElementById('new-ex-input').value = '';
+        renderEditor();
+    }
+
+    function removeEx(dayIdx, exIdx) {
+        weekPlans[currentViewWeekOffset][dayIdx].splice(exIdx, 1);
+        saveToStorage();
+        renderEditor();
+    }
+
+    function saveToStorage() {
+        localStorage.setItem('weekPlans', JSON.stringify(weekPlans));
+        localStorage.setItem('gymLogs', JSON.stringify(logs));
+        localStorage.setItem('weightLogs', JSON.stringify(weightLogs));
+    }
+
+    function updateCharts() {
+        const ctxP = document.getElementById('progressChart').getContext('2d');
+        const dates = [...new Set(logs.map(l => l.date))].sort();
+        new Chart(ctxP, { type: 'line', data: { labels: dates, datasets: [{ label: 'Max Kraft (kg)', data: dates.map(d => Math.max(...logs.filter(l => l.date === d).map(l => l.w))), borderColor: '#2563eb' }] } });
+    }
+
+    function exportData() {
+        const blob = new Blob([JSON.stringify({weekPlans, logs, weightLogs})], {type:'application/json'});
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'gym_pro_data.json'; a.click();
+    }
+</script>
+</body>
+</html>
